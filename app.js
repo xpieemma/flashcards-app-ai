@@ -99,3 +99,52 @@ document.addEventListener('click', (e) => {
         Modal.close(e.target.closest('.modal').id);
     }
 });
+
+/* script.js */
+
+const deckListEl = document.querySelector('.sidebar ul'); // Update selector based on your HTML
+
+function renderSidebar() {
+    deckListEl.innerHTML = '';
+    
+    AppState.decks.forEach(deck => {
+        const li = document.createElement('li');
+        li.dataset.id = deck.id;
+        li.className = (deck.id === AppState.activeDeckId) ? 'active' : '';
+        li.tabIndex = 0; // Make focusable
+        li.innerHTML = `
+            <span>${deck.name}</span>
+            <span class="count">(${deck.cards.length})</span>
+            <button class="btn-delete-deck" aria-label="Delete Deck" style="margin-left:auto; font-size:0.8em">🗑️</button>
+        `;
+        deckListEl.appendChild(li);
+    });
+}
+
+// Delegated Listener for Sidebar (Switching & Deleting)
+deckListEl.addEventListener('click', (e) => {
+    const li = e.target.closest('li');
+    if (!li) return;
+    
+    const deckId = parseInt(li.dataset.id);
+
+    // Handle Delete Button
+    if (e.target.classList.contains('btn-delete-deck')) {
+        e.stopPropagation(); // Prevent switching
+        if(confirm('Delete this deck?')) {
+            AppState.decks = AppState.decks.filter(d => d.id !== deckId);
+            // If we deleted active deck, switch to the first one available
+            if (AppState.activeDeckId === deckId && AppState.decks.length > 0) {
+                AppState.activeDeckId = AppState.decks[0].id;
+            }
+            renderSidebar();
+        }
+        return;
+    }
+
+    // Handle Switch Deck
+    AppState.activeDeckId = deckId;
+    AppState.currentCardIndex = 0; // Reset card position
+    renderSidebar();
+    renderMainView(); // Will be defined later
+});
