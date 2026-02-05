@@ -7,7 +7,6 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <h1>FlashStudy</h1>
     <div class="app-layout">
       <header class="app-header">
         <div class="logo">⚡ FlashStudy</div>
@@ -16,9 +15,7 @@
 
       <nav class="sidebar">
         <ul>
-        <li class="active">JavaScript Basics (12)</li>
-        <li>CSS Grid (8)</li>
-        <li>History 101 (25)</li>
+        <ul></ul>
     </ul>
       </nav>
 
@@ -38,6 +35,25 @@
         <button>Flip</button>
         <button>Next</button>
     </div>
+
+    <div id="modal-new-deck" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h2>New Deck</h2>
+        <input type="text" id="new-deck-name" placeholder="Deck Name">
+        <button id="btn-save-deck">Create</button>
+        <button data-close-modal="true">Cancel</button>
+    </div>
+
+    <div class="flashcard" id="flashcard">
+    <div class="card-inner">
+        <div class="card-front">
+            </div>
+        <div class="card-back">
+            </div>
+    </div>
+</div>
+</div>
+
       </main>
 
       <footer class="app-footer"></footer>
