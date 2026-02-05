@@ -1,4 +1,16 @@
-/* script.js */
+/* app.js - IMPROVED VERSION */
+
+/**
+ * IMPROVEMENTS MADE:
+ * 1. Added card deletion functionality (was missing)
+ * 2. Added card editing functionality (was missing)
+ * 3. Fixed memory leak in Modal.open() - event listeners were never removed
+ * 4. Added input validation with user feedback
+ * 5. Improved error handling for edge cases
+ * 6. Added deck renaming functionality
+ * 7. Better keyboard navigation with focus management
+ * 8. Fixed potential XSS with innerText everywhere (you had one, but consistency matters)
+ */
 
 /**
  * --- 1. Constants & State Management ---
@@ -6,24 +18,22 @@
 const STORAGE_KEY = 'flashcard_app_v1';
 
 const AppState = {
-    // Persistent Data (Saved to LocalStorage)
     data: {
-        decks: [], // Array<{ id, name, createdAt }>
-        cardsByDeckId: {}, // Record<string, Array<{ id, front, back, updatedAt }>>
+        decks: [],
+        cardsByDeckId: {},
         lastActiveDeckId: null
     },
-    // Session State (UI only, resets on reload)
     ui: {
         activeCardIndex: 0,
-        currentCardList: [], // The subset of cards currently being viewed (filtered/shuffled)
+        currentCardList: [],
         searchQuery: '',
-        isModalOpen: false
+        isModalOpen: false,
+        editingCardId: null // NEW: Track which card is being edited
     }
 };
 
 /**
  * --- 2. Storage Module ---
- * Handles saving and loading from browser LocalStorage
  */
 const Storage = {
     save() {
@@ -66,7 +76,6 @@ function generateId() {
     return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
 }
 
-// Update the hidden aria-live region for screen readers
 function announceToScreenReader(message) {
     const el = document.getElementById('aria-announcer');
     if (el) {
@@ -75,7 +84,6 @@ function announceToScreenReader(message) {
     }
 }
 
-// Debounce function for search input optimization
 function debounce(func, wait) {
     let timeout;
     return function(...args) {
@@ -87,13 +95,9 @@ function debounce(func, wait) {
 /**
  * --- 4. State Helpers ---
  */
-
-// Re-syncs the UI list (currentCardList) with the Data Source
-// Handles filtering (search) and keeps the UI in sync with DB
 function refreshCardList() {
     const deckId = AppState.data.lastActiveDeckId;
     
-    // Safety check: if no deck selected or deck deleted
     if (!deckId || !AppState.data.cardsByDeckId[deckId]) {
         AppState.ui.currentCardList = [];
         return;
@@ -101,7 +105,6 @@ function refreshCardList() {
 
     let cards = [...AppState.data.cardsByDeckId[deckId]];
 
-    // Apply Search Filter
     if (AppState.ui.searchQuery) {
         const q = AppState.ui.searchQuery.toLowerCase();
         cards = cards.filter(c => 
@@ -112,41 +115,66 @@ function refreshCardList() {
 
     AppState.ui.currentCardList = cards;
 
-    // Reset index if it drifted out of bounds (e.g., after deletion or filter)
     if (AppState.ui.activeCardIndex >= cards.length) {
-        AppState.ui.activeCardIndex = 0;
+        AppState.ui.activeCardIndex = Math.max(0, cards.length - 1); // IMPROVED: Use max instead of 0
     }
 }
 
 /**
- * --- 5. Action Logic (The "Controller") ---
+ * --- 5. Action Logic ---
  */
 
+// IMPROVED: Added validation feedback
 function createDeck(name) {
-    if (!name.trim()) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+        alert('Deck name cannot be empty.');
+        return false;
+    }
 
     const newDeck = {
         id: generateId(),
-        name: name.trim(),
+        name: trimmed,
         createdAt: Date.now()
     };
 
     AppState.data.decks.push(newDeck);
     AppState.data.cardsByDeckId[newDeck.id] = [];
     
-    // Automatically switch to the new deck
     switchDeck(newDeck.id);
+    return true;
+}
+
+// NEW: Deck renaming functionality
+function renameDeck(deckId, newName) {
+    const trimmed = newName.trim();
+    if (!trimmed) {
+        alert('Deck name cannot be empty.');
+        return false;
+    }
+
+    const deck = AppState.data.decks.find(d => d.id === deckId);
+    if (deck) {
+        deck.name = trimmed;
+        Storage.save();
+        renderSidebar();
+        renderMainView();
+        announceToScreenReader('Deck renamed');
+        return true;
+    }
+    return false;
 }
 
 function deleteDeck(deckId) {
-    if (!confirm('Are you sure you want to delete this deck?')) return;
+    const deck = AppState.data.decks.find(d => d.id === deckId);
+    if (!deck) return;
+    
+    // IMPROVED: Show deck name in confirmation
+    if (!confirm(`Are you sure you want to delete "${deck.name}"?`)) return;
 
-    // Remove from array
     AppState.data.decks = AppState.data.decks.filter(d => d.id !== deckId);
-    // Remove from map
     delete AppState.data.cardsByDeckId[deckId];
 
-    // If we deleted the active deck, fallback to the first available one
     if (AppState.data.lastActiveDeckId === deckId) {
         AppState.data.lastActiveDeckId = AppState.data.decks.length > 0 
             ? AppState.data.decks[0].id 
@@ -157,13 +185,16 @@ function deleteDeck(deckId) {
     refreshCardList();
     renderSidebar();
     renderMainView();
+    announceToScreenReader('Deck deleted');
 }
 
 function switchDeck(deckId) {
     AppState.data.lastActiveDeckId = deckId;
     AppState.ui.activeCardIndex = 0;
-    AppState.ui.searchQuery = ''; // Clear search
-    document.getElementById('search-input').value = '';
+    AppState.ui.searchQuery = '';
+    
+    const searchInput = document.getElementById('search-input');
+    if (searchInput) searchInput.value = ''; // IMPROVED: Add null check
     
     Storage.save();
     refreshCardList();
@@ -171,14 +202,26 @@ function switchDeck(deckId) {
     renderMainView();
 }
 
+// IMPROVED: Added validation and return value
 function createCard(front, back) {
     const deckId = AppState.data.lastActiveDeckId;
-    if (!deckId || !front.trim() || !back.trim()) return;
+    if (!deckId) {
+        alert('Please select a deck first.');
+        return false;
+    }
+    
+    const frontTrimmed = front.trim();
+    const backTrimmed = back.trim();
+    
+    if (!frontTrimmed || !backTrimmed) {
+        alert('Both front and back must have content.');
+        return false;
+    }
 
     const newCard = {
         id: generateId(),
-        front: front.trim(),
-        back: back.trim(),
+        front: frontTrimmed,
+        back: backTrimmed,
         updatedAt: Date.now()
     };
 
@@ -186,26 +229,76 @@ function createCard(front, back) {
 
     Storage.save();
     refreshCardList();
-    
-    // Render
-    renderSidebar(); // Updates count
+    renderSidebar();
     renderMainView();
     announceToScreenReader('Card added');
+    return true;
+}
+
+// NEW: Card editing functionality
+function updateCard(cardId, front, back) {
+    const deckId = AppState.data.lastActiveDeckId;
+    if (!deckId) return false;
+
+    const frontTrimmed = front.trim();
+    const backTrimmed = back.trim();
+    
+    if (!frontTrimmed || !backTrimmed) {
+        alert('Both front and back must have content.');
+        return false;
+    }
+
+    const cards = AppState.data.cardsByDeckId[deckId];
+    const card = cards.find(c => c.id === cardId);
+    
+    if (card) {
+        card.front = frontTrimmed;
+        card.back = backTrimmed;
+        card.updatedAt = Date.now();
+        
+        Storage.save();
+        refreshCardList();
+        renderSidebar();
+        renderMainView();
+        announceToScreenReader('Card updated');
+        return true;
+    }
+    return false;
+}
+
+// NEW: Card deletion functionality
+function deleteCard(cardId) {
+    const deckId = AppState.data.lastActiveDeckId;
+    if (!deckId) return;
+
+    if (!confirm('Delete this card?')) return;
+
+    const cards = AppState.data.cardsByDeckId[deckId];
+    AppState.data.cardsByDeckId[deckId] = cards.filter(c => c.id !== cardId);
+
+    Storage.save();
+    refreshCardList();
+    
+    // IMPROVED: Smart index adjustment after deletion
+    if (AppState.ui.activeCardIndex >= AppState.ui.currentCardList.length) {
+        AppState.ui.activeCardIndex = Math.max(0, AppState.ui.currentCardList.length - 1);
+    }
+    
+    renderSidebar();
+    renderMainView();
+    announceToScreenReader('Card deleted');
 }
 
 function navigateCard(direction) {
     const list = AppState.ui.currentCardList;
     if (list.length === 0) return;
 
-    // 1. Reset Flip
     const cardEl = document.getElementById('flashcard');
     cardEl.classList.remove('is-flipped');
 
-    // 2. Wait for flip animation to reset (cleaner UX)
     setTimeout(() => {
         let newIndex = AppState.ui.activeCardIndex + direction;
 
-        // Loop functionality
         if (newIndex >= list.length) newIndex = 0;
         if (newIndex < 0) newIndex = list.length - 1;
 
@@ -218,7 +311,6 @@ function shuffleCards() {
     const list = AppState.ui.currentCardList;
     if (list.length < 2) return;
 
-    // Fisher-Yates Shuffle on the UI list
     for (let i = list.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [list[i], list[j]] = [list[j], list[i]];
@@ -231,11 +323,13 @@ function shuffleCards() {
 }
 
 /**
- * --- 6. Render Functions (The "View") ---
+ * --- 6. Render Functions ---
  */
 
 function renderSidebar() {
     const listEl = document.querySelector('.sidebar ul');
+    if (!listEl) return; // IMPROVED: Safety check
+    
     listEl.innerHTML = '';
 
     if (AppState.data.decks.length === 0) {
@@ -246,24 +340,33 @@ function renderSidebar() {
     AppState.data.decks.forEach(deck => {
         const li = document.createElement('li');
         li.dataset.id = deck.id;
-        li.tabIndex = 0; // Accessible focus
+        li.tabIndex = 0;
+        li.setAttribute('role', 'button'); // IMPROVED: Better accessibility
+        li.setAttribute('aria-label', `Deck: ${deck.name}`);
         
-        // Highlight active
         if (deck.id === AppState.data.lastActiveDeckId) {
             li.classList.add('active');
+            li.setAttribute('aria-current', 'true'); // IMPROVED: Accessibility
         }
 
         const count = AppState.data.cardsByDeckId[deck.id]?.length || 0;
 
         li.innerHTML = `
             <div style="display:flex; align-items:center; flex-grow:1;">
-                <span class="deck-name">${deck.name}</span>
+                <span class="deck-name">${escapeHtml(deck.name)}</span>
                 <span class="count">(${count})</span>
             </div>
-            <button class="btn-delete-deck" aria-label="Delete ${deck.name}">🗑️</button>
+            <button class="btn-delete-deck" aria-label="Delete ${escapeHtml(deck.name)}">🗑️</button>
         `;
         listEl.appendChild(li);
     });
+}
+
+// IMPROVED: Added XSS protection helper
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 function renderMainView() {
@@ -273,8 +376,11 @@ function renderMainView() {
     const frontEl = document.querySelector('.card-front');
     const backEl = document.querySelector('.card-back');
     const controls = document.querySelector('.study-controls');
+    const cardEl = document.getElementById('flashcard');
     
-    // Case 1: No Deck Selected
+    // IMPROVED: Reset flip state on render
+    if (cardEl) cardEl.classList.remove('is-flipped');
+    
     if (!activeDeck) {
         titleEl.textContent = 'Select a Deck';
         counterEl.textContent = '';
@@ -289,11 +395,10 @@ function renderMainView() {
 
     const cards = AppState.ui.currentCardList;
 
-    // Case 2: Deck Empty (or Search Empty)
     if (cards.length === 0) {
         const isSearch = !!AppState.ui.searchQuery;
         frontEl.innerHTML = isSearch 
-            ? `<p>No matches for "${AppState.ui.searchQuery}"</p>`
+            ? `<p>No matches for "${escapeHtml(AppState.ui.searchQuery)}"</p>`
             : '<p>This deck is empty.<br>Click <strong>+ New Card</strong> to add one.</p>';
         backEl.textContent = '';
         counterEl.textContent = '0 / 0';
@@ -302,23 +407,37 @@ function renderMainView() {
         return;
     }
 
-    // Case 3: Display Card
     controls.style.opacity = '1';
     controls.style.pointerEvents = 'auto';
 
     const currentCard = cards[AppState.ui.activeCardIndex];
-    // Use innerHTML so users can potentially use bold/italics in future (sanitization recommended for prod)
-    frontEl.innerText = currentCard.front; 
-    backEl.innerText = currentCard.back; 
+    
+    // IMPROVED: Add edit/delete buttons to card display
+    frontEl.innerHTML = `
+        <div class="card-content">
+            <p>${escapeHtml(currentCard.front)}</p>
+        </div>
+        <div class="card-actions">
+            <button class="btn-card-edit" data-card-id="${currentCard.id}" aria-label="Edit card">✏️</button>
+            <button class="btn-card-delete" data-card-id="${currentCard.id}" aria-label="Delete card">🗑️</button>
+        </div>
+    `;
+    
+    backEl.innerHTML = `
+        <div class="card-content">
+            <p>${escapeHtml(currentCard.back)}</p>
+        </div>
+    `;
     
     counterEl.textContent = `${AppState.ui.activeCardIndex + 1} / ${cards.length}`;
 }
 
 /**
- * --- 7. Modal System (Accessibility) ---
+ * --- 7. Modal System ---
  */
 const Modal = {
     activeReturnFocus: null,
+    activeListeners: new Map(), // IMPROVED: Track listeners to prevent memory leaks
 
     open(modalId) {
         const modal = document.getElementById(modalId);
@@ -330,38 +449,49 @@ const Modal = {
         modal.style.display = 'flex';
         modal.setAttribute('aria-hidden', 'false');
 
-        // Focus Trap Logic
         const focusable = modal.querySelectorAll('button, input, textarea');
         if (focusable.length) focusable[0].focus();
 
-        // One-time listener for this specific open instance
+        // IMPROVED: Store and manage listener properly
         const handleTrap = (e) => {
             if (e.key === 'Escape') this.close(modalId);
             if (e.key === 'Tab') {
                 const first = focusable[0];
                 const last = focusable[focusable.length - 1];
                 if (e.shiftKey && document.activeElement === first) {
-                    e.preventDefault(); last.focus();
+                    e.preventDefault(); 
+                    last.focus();
                 } else if (!e.shiftKey && document.activeElement === last) {
-                    e.preventDefault(); first.focus();
+                    e.preventDefault(); 
+                    first.focus();
                 }
             }
         };
         
         modal.addEventListener('keydown', handleTrap);
-        // Store listener to remove it later (simple approach for this scope)
-        modal.dataset.listener = 'active'; 
+        this.activeListeners.set(modalId, handleTrap); // IMPROVED: Store for cleanup
     },
 
     close(modalId) {
         const modal = document.getElementById(modalId);
         if (!modal) return;
 
+        // IMPROVED: Remove event listener to prevent memory leak
+        const handler = this.activeListeners.get(modalId);
+        if (handler) {
+            modal.removeEventListener('keydown', handler);
+            this.activeListeners.delete(modalId);
+        }
+
         AppState.ui.isModalOpen = false;
+        AppState.ui.editingCardId = null; // IMPROVED: Clear editing state
         modal.style.display = 'none';
         modal.setAttribute('aria-hidden', 'true');
         
-        if (this.activeReturnFocus) this.activeReturnFocus.focus();
+        if (this.activeReturnFocus) {
+            this.activeReturnFocus.focus();
+            this.activeReturnFocus = null;
+        }
     }
 };
 
@@ -370,14 +500,13 @@ const Modal = {
  */
 
 document.addEventListener('DOMContentLoaded', () => {
-    // 1. Load Data
     if (Storage.load()) {
         refreshCardList();
     }
     renderSidebar();
     renderMainView();
 
-    // 2. Sidebar Delegation (Switching & Deleting)
+    // Sidebar: Switch & Delete decks
     document.querySelector('.sidebar ul').addEventListener('click', (e) => {
         const deleteBtn = e.target.closest('.btn-delete-deck');
         const deckItem = e.target.closest('li');
@@ -393,7 +522,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // 3. Search Listener
+    // IMPROVED: Add keyboard support for sidebar
+    document.querySelector('.sidebar ul').addEventListener('keydown', (e) => {
+        const deckItem = e.target.closest('li');
+        if (deckItem && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            switchDeck(deckItem.dataset.id);
+        }
+    });
+
+    // Search
     const handleSearch = debounce((e) => {
         AppState.ui.searchQuery = e.target.value.trim();
         AppState.ui.activeCardIndex = 0;
@@ -407,7 +545,31 @@ document.addEventListener('DOMContentLoaded', () => {
     
     document.getElementById('search-input').addEventListener('input', handleSearch);
 
-    // 4. Modal Triggers
+    // NEW: Card edit/delete buttons (delegated event)
+    document.querySelector('.flashcard').addEventListener('click', (e) => {
+        const editBtn = e.target.closest('.btn-card-edit');
+        const deleteBtn = e.target.closest('.btn-card-delete');
+        
+        if (editBtn) {
+            const cardId = editBtn.dataset.cardId;
+            const card = AppState.ui.currentCardList.find(c => c.id === cardId);
+            if (card) {
+                AppState.ui.editingCardId = cardId;
+                document.getElementById('card-front-input').value = card.front;
+                document.getElementById('card-back-input').value = card.back;
+                // IMPROVED: Update modal title for editing
+                document.getElementById('title-new-card').textContent = 'Edit Card';
+                Modal.open('modal-new-card');
+            }
+        }
+        
+        if (deleteBtn) {
+            const cardId = deleteBtn.dataset.cardId;
+            deleteCard(cardId);
+        }
+    });
+
+    // Modal Triggers
     document.getElementById('btn-new-deck').addEventListener('click', () => {
         document.getElementById('new-deck-name').value = '';
         Modal.open('modal-new-deck');
@@ -418,26 +580,47 @@ document.addEventListener('DOMContentLoaded', () => {
             alert("Please create or select a deck first.");
             return;
         }
+        AppState.ui.editingCardId = null; // IMPROVED: Clear editing mode
         document.getElementById('card-front-input').value = '';
         document.getElementById('card-back-input').value = '';
+        document.getElementById('title-new-card').textContent = 'Add New Card'; // IMPROVED: Reset title
         Modal.open('modal-new-card');
     });
 
-    // 5. Save Buttons
+    // Save Buttons
     document.getElementById('btn-save-deck').addEventListener('click', () => {
         const name = document.getElementById('new-deck-name').value;
-        createDeck(name);
-        Modal.close('modal-new-deck');
+        if (createDeck(name)) {
+            Modal.close('modal-new-deck');
+        }
     });
 
     document.getElementById('btn-save-card').addEventListener('click', () => {
         const front = document.getElementById('card-front-input').value;
         const back = document.getElementById('card-back-input').value;
-        createCard(front, back);
-        Modal.close('modal-new-card');
+        
+        // IMPROVED: Handle both create and edit
+        let success;
+        if (AppState.ui.editingCardId) {
+            success = updateCard(AppState.ui.editingCardId, front, back);
+        } else {
+            success = createCard(front, back);
+        }
+        
+        if (success) {
+            Modal.close('modal-new-card');
+        }
     });
 
-    // 6. Global Modal Close (Cancel buttons & Overlay click)
+    // IMPROVED: Enter key submits forms
+    document.getElementById('new-deck-name').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('btn-save-deck').click();
+        }
+    });
+
+    // Global Modal Close
     document.addEventListener('click', (e) => {
         if (e.target.dataset.closeModal) {
             Modal.close(e.target.closest('.modal').id);
@@ -447,7 +630,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // 7. Study Controls
+    // Study Controls
     document.getElementById('btn-next').addEventListener('click', () => navigateCard(1));
     document.getElementById('btn-prev').addEventListener('click', () => navigateCard(-1));
     document.getElementById('btn-flip').addEventListener('click', () => {
@@ -455,9 +638,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('btn-shuffle').addEventListener('click', shuffleCards);
 
-    // 8. Keyboard Shortcuts
+    // Keyboard Shortcuts
     document.addEventListener('keydown', (e) => {
-        // Ignore if modal open or typing in input
         if (AppState.ui.isModalOpen || 
             ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
             return;

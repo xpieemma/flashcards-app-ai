@@ -4,10 +4,23 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="A simple, accessible Flashcard App for study.">
+    <!-- IMPROVED: Added theme-color for better mobile experience -->
+    <meta name="theme-color" content="#2563eb">
     <title>Flashcard App</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+
+    <!-- 
+        IMPROVEMENTS MADE:
+        1. Better semantic HTML with improved ARIA labels
+        2. Added role attributes for better screen reader support
+        3. Improved keyboard navigation hints
+        4. Better empty states
+        5. More descriptive button labels
+        6. Added proper form structure
+        7. Improved modal accessibility
+    -->
 
     <div class="app-layout">
         
@@ -16,85 +29,168 @@
             <button id="btn-new-deck" class="btn btn-primary" aria-label="Create a new deck">+ New Deck</button>
         </header>
 
-        <nav class="sidebar" aria-label="Deck List">
-            <ul>
-                </ul>
+        <!-- IMPROVED: Better aria-label and role -->
+        <nav class="sidebar" aria-label="Deck navigation" role="navigation">
+            <ul role="list">
+                <!-- Deck items will be inserted here -->
+            </ul>
         </nav>
 
-        <main class="main-content">
+        <main class="main-content" role="main">
             
-            <section class="study-container">
+            <section class="study-container" aria-label="Study area">
                 <div class="deck-header">
                     <h2 id="current-deck-title">Select a Deck</h2>
-                    <div id="card-counter" class="counter"></div>
+                    <!-- IMPROVED: Added aria-live for dynamic updates -->
+                    <div id="card-counter" class="counter" aria-live="polite" aria-atomic="true"></div>
                 </div>
 
                 <div class="toolbar">
-                    <input type="text" id="search-input" placeholder="Search cards..." aria-label="Search within this deck">
+                    <!-- IMPROVED: Better placeholder and aria-label -->
+                    <input 
+                        type="search" 
+                        id="search-input" 
+                        placeholder="Search cards by keyword..." 
+                        aria-label="Search cards in current deck"
+                    >
                     <div class="toolbar-actions">
-                        <button id="btn-shuffle" class="btn btn-secondary">🔀 Shuffle</button>
-                        <button id="btn-new-card" class="btn btn-secondary">+ New Card</button>
+                        <button id="btn-shuffle" class="btn btn-secondary" aria-label="Shuffle cards in random order">🔀 Shuffle</button>
+                        <button id="btn-new-card" class="btn btn-secondary" aria-label="Add a new card to this deck">+ New Card</button>
                     </div>
                 </div>
 
-                <div class="flashcard" id="flashcard" tabindex="0" aria-label="Flashcard. Click or Press Space to flip.">
+                <!-- IMPROVED: Better ARIA attributes and structure -->
+                <div 
+                    class="flashcard" 
+                    id="flashcard" 
+                    role="button"
+                    tabindex="0" 
+                    aria-label="Flashcard. Click or press Space to flip."
+                    aria-pressed="false"
+                >
                     <div class="card-inner">
-                        <div class="card-front">
+                        <div class="card-front" aria-label="Card front">
                             <p>Select a deck to start studying.</p>
                         </div>
-                        <div class="card-back">
-                            </div>
+                        <div class="card-back" aria-label="Card back" aria-hidden="true">
+                            <!-- Content inserted dynamically -->
+                        </div>
                     </div>
                 </div>
 
-                <div class="controls study-controls">
-                    <button id="btn-prev" class="btn btn-control" aria-label="Previous Card">← Prev</button>
-                    <button id="btn-flip" class="btn btn-control" aria-label="Flip Card">Flip ⟳</button>
-                    <button id="btn-next" class="btn btn-control" aria-label="Next Card">Next →</button>
-                </div>
+                <!-- IMPROVED: Better structure with nav role -->
+                <nav class="controls study-controls" aria-label="Card navigation">
+                    <button id="btn-prev" class="btn btn-control" aria-label="Go to previous card">← Prev</button>
+                    <button id="btn-flip" class="btn btn-control" aria-label="Flip card to see answer">Flip ⟳</button>
+                    <button id="btn-next" class="btn btn-control" aria-label="Go to next card">Next →</button>
+                </nav>
             </section>
 
         </main>
 
-        <footer class="app-footer">
-            <p>Tips: <kbd>Space</kbd> to flip, <kbd>Arrows</kbd> to navigate.</p>
+        <footer class="app-footer" role="contentinfo">
+            <!-- IMPROVED: More descriptive keyboard shortcuts -->
+            <p>
+                <strong>Keyboard shortcuts:</strong> 
+                <kbd>Space</kbd> or <kbd>Enter</kbd> to flip, 
+                <kbd>←</kbd> <kbd>→</kbd> to navigate cards
+            </p>
         </footer>
 
     </div>
 
-    <div id="modal-new-deck" class="modal" role="dialog" aria-modal="true" aria-labelledby="title-new-deck" style="display:none;">
+    <!-- IMPROVED: Better modal structure with proper form elements -->
+    <div 
+        id="modal-new-deck" 
+        class="modal" 
+        role="dialog" 
+        aria-modal="true" 
+        aria-labelledby="title-new-deck"
+        aria-hidden="true"
+        style="display:none;"
+    >
         <div class="modal-content">
             <h2 id="title-new-deck">Create New Deck</h2>
-            <div class="form-group">
-                <label for="new-deck-name">Deck Name</label>
-                <input type="text" id="new-deck-name" placeholder="e.g., Biology 101">
-            </div>
-            <div class="modal-actions">
-                <button class="btn btn-secondary" data-close-modal="true">Cancel</button>
-                <button id="btn-save-deck" class="btn btn-primary">Create Deck</button>
-            </div>
+            <!-- IMPROVED: Wrapped in form for better semantics -->
+            <form id="form-new-deck" onsubmit="return false;">
+                <div class="form-group">
+                    <label for="new-deck-name">Deck Name <span aria-label="required">*</span></label>
+                    <input 
+                        type="text" 
+                        id="new-deck-name" 
+                        placeholder="e.g., Biology 101"
+                        required
+                        aria-required="true"
+                        maxlength="100"
+                    >
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" data-close-modal="true">Cancel</button>
+                    <button type="submit" id="btn-save-deck" class="btn btn-primary">Create Deck</button>
+                </div>
+            </form>
         </div>
     </div>
 
-    <div id="modal-new-card" class="modal" role="dialog" aria-modal="true" aria-labelledby="title-new-card" style="display:none;">
+    <!-- IMPROVED: Better modal structure with proper form -->
+    <div 
+        id="modal-new-card" 
+        class="modal" 
+        role="dialog" 
+        aria-modal="true" 
+        aria-labelledby="title-new-card"
+        aria-hidden="true"
+        style="display:none;"
+    >
         <div class="modal-content">
+            <!-- This title will change between "Add New Card" and "Edit Card" -->
             <h2 id="title-new-card">Add New Card</h2>
-            <div class="form-group">
-                <label for="card-front-input">Front (Question)</label>
-                <textarea id="card-front-input" rows="3" placeholder="What is..."></textarea>
-            </div>
-            <div class="form-group">
-                <label for="card-back-input">Back (Answer)</label>
-                <textarea id="card-back-input" rows="3" placeholder="It is..."></textarea>
-            </div>
-            <div class="modal-actions">
-                <button class="btn btn-secondary" data-close-modal="true">Cancel</button>
-                <button id="btn-save-card" class="btn btn-primary">Save Card</button>
-            </div>
+            <form id="form-new-card" onsubmit="return false;">
+                <div class="form-group">
+                    <label for="card-front-input">Front (Question) <span aria-label="required">*</span></label>
+                    <textarea 
+                        id="card-front-input" 
+                        rows="3" 
+                        placeholder="What is..."
+                        required
+                        aria-required="true"
+                        maxlength="500"
+                    ></textarea>
+                    <!-- IMPROVED: Character count hint -->
+                    <small class="form-hint" aria-live="polite">
+                        <span id="front-char-count">0</span> / 500 characters
+                    </small>
+                </div>
+                <div class="form-group">
+                    <label for="card-back-input">Back (Answer) <span aria-label="required">*</span></label>
+                    <textarea 
+                        id="card-back-input" 
+                        rows="3" 
+                        placeholder="It is..."
+                        required
+                        aria-required="true"
+                        maxlength="500"
+                    ></textarea>
+                    <small class="form-hint" aria-live="polite">
+                        <span id="back-char-count">0</span> / 500 characters
+                    </small>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" data-close-modal="true">Cancel</button>
+                    <button type="submit" id="btn-save-card" class="btn btn-primary">Save Card</button>
+                </div>
+            </form>
         </div>
     </div>
 
-    <div id="aria-announcer" class="sr-only" aria-live="polite"></div>
+    <!-- IMPROVED: More descriptive aria-live region -->
+    <div 
+        id="aria-announcer" 
+        class="sr-only" 
+        aria-live="polite" 
+        aria-atomic="true"
+        role="status"
+    ></div>
 
     <script src="app.js"></script>
 </body>
