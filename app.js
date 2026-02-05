@@ -1,30 +1,15 @@
-/* app.js - ENHANCED VERSION WITH API INTEGRATIONS */
 
-/**
- * IMPROVEMENTS MADE:
- * 1. Added card deletion functionality
- * 2. Added card editing functionality
- * 3. Fixed memory leak in Modal.open() - event listeners are now removed
- * 4. Added input validation with user feedback
- * 5. Improved error handling for edge cases
- * 6. Better keyboard navigation with focus management
- * 7. Fixed potential XSS with escapeHtml everywhere
- * 8. **NEW: Integrated 3 free APIs for flashcard generation**
- * - Google Gemini AI (for any topic)
- * - Open Trivia Database (for trivia/quiz decks)
- * - REST Countries API (for geography decks)
- */
 
-/**
- * --- 1. Constants & State Management ---
- */
-const STORAGE_KEY = 'flashcard_app_v1';
+const STORAGE_KEY = 'flashcard_app_final';
+
+const GEMINI_API_KEY = 'AIzaSyCGwwByWY_cc2yPOWJA5hyoo_SxaMlFH-s'; 
 
 const AppState = {
     data: {
-        decks: [],
+        decks: [], 
         cardsByDeckId: {},
-        lastActiveDeckId: null
+        lastActiveDeckId: null,
+        theme: 'light'
     },
     ui: {
         activeCardIndex: 0,
@@ -35,858 +20,413 @@ const AppState = {
     }
 };
 
-/**
- * --- 2. Storage Module ---
- */
+/** --- 1. Storage & Theme Engine --- */
 const Storage = {
     save() {
         try {
-            const serializable = {
-                decks: AppState.data.decks,
-                cardsByDeckId: AppState.data.cardsByDeckId,
-                lastActiveDeckId: AppState.data.lastActiveDeckId
-            };
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
-        } catch (e) {
-            console.error('Storage failed:', e);
-            alert('Could not save progress. LocalStorage might be full.');
-        }
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(AppState.data));
+        } catch (e) { alert('Storage full. Please delete some decks.'); }
     },
-
     load() {
         const json = localStorage.getItem(STORAGE_KEY);
-        if (!json) return false;
-
-        try {
+        if (json) {
             const parsed = JSON.parse(json);
-            if (Array.isArray(parsed.decks)) {
-                AppState.data.decks = parsed.decks;
-                AppState.data.cardsByDeckId = parsed.cardsByDeckId || {};
-                AppState.data.lastActiveDeckId = parsed.lastActiveDeckId;
-                return true;
-            }
-        } catch (e) {
-            console.error('Corrupt save data:', e);
+            if (Array.isArray(parsed.decks)) AppState.data = parsed;
         }
-        return false;
     }
 };
 
-/**
- * --- 3. Utilities ---
- */
-function generateId() {
-    return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
-}
-
-function announceToScreenReader(message) {
-    const el = document.getElementById('aria-announcer');
-    if (el) {
-        el.textContent = message;
-        setTimeout(() => { el.textContent = ''; }, 1000);
+const Theme = {
+    init() {
+        if (!localStorage.getItem(STORAGE_KEY)) {
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            AppState.data.theme = prefersDark ? 'dark' : 'light';
+        }
+        this.apply(AppState.data.theme);
+    },
+    toggle() {
+        AppState.data.theme = AppState.data.theme === 'light' ? 'dark' : 'light';
+        this.apply(AppState.data.theme);
+        Storage.save();
+    },
+    apply(mode) {
+        document.body.setAttribute('data-theme', mode);
+        const btn = document.getElementById('btn-theme-toggle');
+        if(btn) btn.textContent = mode === 'dark' ? '☀️' : '🌙';
     }
-}
+};
 
-function debounce(func, wait) {
-    let timeout;
-    return function(...args) {
-        clearTimeout(timeout);
-        timeout = setTimeout(() => func.apply(this, args), wait);
-    };
-}
+/** --- 2. Memory Engine (Leitner SRS) --- */
+const Scheduler = {
+    intervals: [1, 3, 7, 14, 30], // Days
+    calculate(card, rating) {
+        let box = card.box || 0;
+        if (rating === 'again') box = 0;
+        else if (rating === 'good') box = Math.min(box + 1, this.intervals.length - 1);
+        else if (rating === 'easy') box = Math.min(box + 2, this.intervals.length - 1);
 
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
+        return {
+            box,
+            nextReview: Date.now() + (this.intervals[box] * 24 * 60 * 60 * 1000)
+        };
+    }
+};
 
-function decodeHtmlEntities(text) {
-    const textarea = document.createElement('textarea');
-    textarea.innerHTML = text;
-    return textarea.value;
-}
-
-/**
- * --- 4. State Helpers ---
- */
+/** --- 3. Core Logic --- */
 function refreshCardList() {
     const deckId = AppState.data.lastActiveDeckId;
-    
     if (!deckId || !AppState.data.cardsByDeckId[deckId]) {
         AppState.ui.currentCardList = [];
         return;
     }
-
+    
     let cards = [...AppState.data.cardsByDeckId[deckId]];
-
+    
     if (AppState.ui.searchQuery) {
-        const q = AppState.ui.searchQuery.toLowerCase();
-        cards = cards.filter(c => 
-            c.front.toLowerCase().includes(q) || 
-            c.back.toLowerCase().includes(q)
-        );
+        if (AppState.ui.searchQuery === '__DUE__') {
+            const now = Date.now();
+            cards = cards.filter(c => !c.nextReview || c.nextReview <= now);
+        } else {
+            const q = AppState.ui.searchQuery.toLowerCase();
+            cards = cards.filter(c => c.front.toLowerCase().includes(q) || c.back.toLowerCase().includes(q));
+        }
     }
-
+    
     AppState.ui.currentCardList = cards;
-
-    if (AppState.ui.activeCardIndex >= cards.length) {
-        AppState.ui.activeCardIndex = Math.max(0, cards.length - 1);
-    }
+    if (AppState.ui.activeCardIndex >= cards.length) AppState.ui.activeCardIndex = 0;
 }
 
-/**
- * --- 5. Action Logic ---
- */
-
 function createDeck(name) {
-    const trimmed = name.trim();
-    if (!trimmed) {
-        alert('Deck name cannot be empty.');
-        return false;
-    }
-
-    const newDeck = {
-        id: generateId(),
-        name: trimmed,
-        createdAt: Date.now()
-    };
-
-    AppState.data.decks.push(newDeck);
-    AppState.data.cardsByDeckId[newDeck.id] = [];
-    
-    switchDeck(newDeck.id);
+    if (!name.trim()) return false;
+    const id = crypto.randomUUID();
+    AppState.data.decks.push({ id, name: name.trim(), createdAt: Date.now() });
+    AppState.data.cardsByDeckId[id] = [];
+    switchDeck(id);
     return true;
 }
 
-function deleteDeck(deckId) {
-    const deck = AppState.data.decks.find(d => d.id === deckId);
-    if (!deck) return;
-    
-    if (!confirm(`Are you sure you want to delete "${deck.name}"?`)) return;
-
-    AppState.data.decks = AppState.data.decks.filter(d => d.id !== deckId);
-    delete AppState.data.cardsByDeckId[deckId];
-
-    if (AppState.data.lastActiveDeckId === deckId) {
-        AppState.data.lastActiveDeckId = AppState.data.decks.length > 0 
-            ? AppState.data.decks[0].id 
-            : null;
-    }
-
-    Storage.save();
-    refreshCardList();
-    renderSidebar();
-    renderMainView();
-    announceToScreenReader('Deck deleted');
-}
-
-function switchDeck(deckId) {
-    AppState.data.lastActiveDeckId = deckId;
+function switchDeck(id) {
+    AppState.data.lastActiveDeckId = id;
     AppState.ui.activeCardIndex = 0;
     AppState.ui.searchQuery = '';
-    
     const searchInput = document.getElementById('search-input');
-    if (searchInput) searchInput.value = '';
-    
+    if(searchInput) searchInput.value = '';
     Storage.save();
     refreshCardList();
-    renderSidebar();
-    renderMainView();
+    renderAll();
 }
 
 function createCard(front, back) {
     const deckId = AppState.data.lastActiveDeckId;
-    if (!deckId) {
-        alert('Please select a deck first.');
-        return false;
-    }
-    
-    const frontTrimmed = front.trim();
-    const backTrimmed = back.trim();
-    
-    if (!frontTrimmed || !backTrimmed) {
-        alert('Both front and back must have content.');
-        return false;
-    }
-
-    const newCard = {
-        id: generateId(),
-        front: frontTrimmed,
-        back: backTrimmed,
-        updatedAt: Date.now()
-    };
-
-    AppState.data.cardsByDeckId[deckId].push(newCard);
-
+    if (!deckId) return alert('Select a deck first.');
+    const card = { id: crypto.randomUUID(), front, back, box: 0, nextReview: null };
+    AppState.data.cardsByDeckId[deckId].push(card);
     Storage.save();
     refreshCardList();
-    renderSidebar();
-    renderMainView();
-    announceToScreenReader('Card added');
+    renderAll();
+    announce('Card Added');
     return true;
 }
 
-function updateCard(cardId, front, back) {
+function updateCard(id, front, back) {
     const deckId = AppState.data.lastActiveDeckId;
-    if (!deckId) return false;
-
-    const frontTrimmed = front.trim();
-    const backTrimmed = back.trim();
-    
-    if (!frontTrimmed || !backTrimmed) {
-        alert('Both front and back must have content.');
-        return false;
-    }
-
-    const cards = AppState.data.cardsByDeckId[deckId];
-    const card = cards.find(c => c.id === cardId);
-    
+    const card = AppState.data.cardsByDeckId[deckId].find(c => c.id === id);
     if (card) {
-        card.front = frontTrimmed;
-        card.back = backTrimmed;
-        card.updatedAt = Date.now();
-        
-        Storage.save();
-        refreshCardList();
-        renderSidebar();
-        renderMainView();
-        announceToScreenReader('Card updated');
+        card.front = front; card.back = back;
+        Storage.save(); refreshCardList(); renderAll(); announce('Card Updated');
         return true;
     }
-    return false;
 }
 
-function deleteCard(cardId) {
+function deleteCard(id) {
+    if(!confirm('Delete this card?')) return;
     const deckId = AppState.data.lastActiveDeckId;
-    if (!deckId) return;
-
-    if (!confirm('Delete this card?')) return;
-
-    const cards = AppState.data.cardsByDeckId[deckId];
-    AppState.data.cardsByDeckId[deckId] = cards.filter(c => c.id !== cardId);
-
-    Storage.save();
-    refreshCardList();
-    
-    if (AppState.ui.activeCardIndex >= AppState.ui.currentCardList.length) {
-        AppState.ui.activeCardIndex = Math.max(0, AppState.ui.currentCardList.length - 1);
-    }
-    
-    renderSidebar();
-    renderMainView();
-    announceToScreenReader('Card deleted');
+    AppState.data.cardsByDeckId[deckId] = AppState.data.cardsByDeckId[deckId].filter(c => c.id !== id);
+    Storage.save(); refreshCardList(); renderAll(); announce('Card Deleted');
 }
 
-function navigateCard(direction) {
-    const list = AppState.ui.currentCardList;
-    if (list.length === 0) return;
-
-    const cardEl = document.getElementById('flashcard');
-    cardEl.classList.remove('is-flipped');
-
-    setTimeout(() => {
-        let newIndex = AppState.ui.activeCardIndex + direction;
-
-        if (newIndex >= list.length) newIndex = 0;
-        if (newIndex < 0) newIndex = list.length - 1;
-
-        AppState.ui.activeCardIndex = newIndex;
-        renderMainView();
-    }, 150);
+function deleteDeck(id) {
+    if(!confirm('Delete this deck?')) return;
+    AppState.data.decks = AppState.data.decks.filter(d => d.id !== id);
+    delete AppState.data.cardsByDeckId[id];
+    if (AppState.data.lastActiveDeckId === id) AppState.data.lastActiveDeckId = null;
+    Storage.save(); refreshCardList(); renderAll(); announce('Deck Deleted');
 }
 
-function shuffleCards() {
-    const list = AppState.ui.currentCardList;
-    if (list.length < 2) return;
-
-    for (let i = list.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [list[i], list[j]] = [list[j], list[i]];
-    }
-
-    AppState.ui.activeCardIndex = 0;
-    document.getElementById('flashcard').classList.remove('is-flipped');
-    renderMainView();
-    announceToScreenReader('Deck shuffled');
-}
-
-/**
- * --- 6. API GENERATION MODULE ---
- * Three free APIs for flashcard generation
- */
-
-/**
- * 1. GOOGLE GEMINI AI - Generate flashcards on any topic
- * Get your free API key from: https://aistudio.google.com/app/apikey
- */
-async function generateAIDeck(topic) {
-    const apiKey = 'YOUR_GEMINI_API_KEY'; // REPLACE THIS WITH YOUR KEY
-    
-    if (apiKey === 'YOUR_GEMINI_API_KEY') {
-        alert('Please add your Google Gemini API key in app.js.\nGet it free at: https://aistudio.google.com/app/apikey');
-        return;
-    }
-    
-    const btn = document.getElementById('btn-generate-ai');
-    const originalText = btn.textContent;
-    btn.textContent = '⏳ Generating...';
-    btn.disabled = true;
-
-    try {
-        const prompt = `Create 8 flashcards about "${topic}". 
-Return ONLY a valid JSON array with no markdown formatting.
-Each object must have exactly two keys: "front" (question) and "back" (answer).
-Make the questions clear and educational.
-Example format: [{"front": "What is...?", "back": "It is..."}]`;
-
-        const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text: prompt }] }]
-                })
-            }
-        );
-
-        if (!response.ok) {
-            throw new Error(`API Error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        let rawText = data.candidates[0].content.parts[0].text;
-        
-        // Clean markdown formatting if present
-        rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-        
-        const cards = JSON.parse(rawText);
-
-        if (!Array.isArray(cards) || cards.length === 0) {
-            throw new Error('Invalid response format');
-        }
-
-        // Create deck and add cards
-        if (createDeck(`✨ AI: ${topic}`)) {
-            cards.forEach(card => {
-                if (card.front && card.back) {
-                    createCard(card.front, card.back);
-                }
-            });
-            announceToScreenReader(`Generated ${cards.length} cards about ${topic}`);
-            Modal.close('modal-generate');
-        }
-
-    } catch (error) {
-        console.error('AI Generation Error:', error);
-        alert(`Failed to generate deck: ${error.message}\n\nCheck console for details.`);
-    } finally {
-        btn.textContent = originalText;
-        btn.disabled = false;
-    }
-}
-
-/**
- * 2. OPEN TRIVIA DATABASE - Generate quiz/trivia flashcards
- * No API key needed! Categories: General Knowledge, Science, Computers, etc.
- */
-async function generateTriviaDeck(category = 18, count = 10) {
-    const btn = document.getElementById('btn-generate-trivia');
-    const originalText = btn.textContent;
-    btn.textContent = '⏳ Loading...';
-    btn.disabled = true;
-
-    try {
-        // Category 18 = Computers, 17 = Science & Nature, 9 = General Knowledge
-        const response = await fetch(
-            `https://opentdb.com/api.php?amount=${count}&category=${category}&type=multiple`
-        );
-
-        if (!response.ok) {
-            throw new Error(`API Error: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        if (data.response_code !== 0 || !data.results || data.results.length === 0) {
-            throw new Error('No questions available');
-        }
-
-        const categoryNames = {
-            9: 'General Knowledge',
-            17: 'Science & Nature',
-            18: 'Computer Science',
-            21: 'Sports',
-            23: 'History'
-        };
-
-        const deckName = `🎯 Trivia: ${categoryNames[category] || 'Mixed'}`;
-
-        if (createDeck(deckName)) {
-            data.results.forEach(item => {
-                const question = decodeHtmlEntities(item.question);
-                const correctAnswer = decodeHtmlEntities(item.correct_answer);
-                const incorrectAnswers = item.incorrect_answers.map(a => decodeHtmlEntities(a));
-                
-                // Format as multiple choice
-                const allAnswers = [correctAnswer, ...incorrectAnswers].sort(() => Math.random() - 0.5);
-                const answerList = allAnswers.map((a, i) => `${String.fromCharCode(65 + i)}) ${a}`).join('\n');
-                const correctLetter = String.fromCharCode(65 + allAnswers.indexOf(correctAnswer));
-                
-                const front = `${question}\n\n${answerList}`;
-                const back = `${correctLetter}) ${correctAnswer}`;
-                
-                createCard(front, back);
-            });
-            announceToScreenReader(`Generated ${data.results.length} trivia questions`);
-            Modal.close('modal-generate');
-        }
-
-    } catch (error) {
-        console.error('Trivia Generation Error:', error);
-        alert(`Failed to generate trivia deck: ${error.message}`);
-    } finally {
-        btn.textContent = originalText;
-        btn.disabled = false;
-    }
-}
-
-/**
- * 3. REST COUNTRIES API - Generate geography flashcards
- * No API key needed! Learn capitals, populations, currencies, etc.
- */
-async function generateGeographyDeck(type = 'capitals', count = 20) {
-    const btn = document.getElementById('btn-generate-geo');
-    const originalText = btn.textContent;
-    btn.textContent = '⏳ Loading...';
-    btn.disabled = true;
-
-    try {
-        const response = await fetch(
-            'https://restcountries.com/v3.1/all?fields=name,capital,population,currencies,region,flags'
-        );
-
-        if (!response.ok) {
-            throw new Error(`API Error: ${response.status}`);
-        }
-
-        const countries = await response.json();
-
-        // Filter out countries without the data we need
-        const validCountries = countries.filter(c => {
-            if (type === 'capitals') return c.capital && c.capital.length > 0;
-            if (type === 'populations') return c.population > 0;
-            return true;
-        });
-
-        // Shuffle and take the requested count
-        const shuffled = validCountries.sort(() => Math.random() - 0.5).slice(0, count);
-
-        const deckNames = {
-            'capitals': '🌍 Geography: World Capitals',
-            'populations': '🌍 Geography: Populations',
-            'currencies': '🌍 Geography: Currencies'
-        };
-
-        if (createDeck(deckNames[type] || '🌍 Geography')) {
-            shuffled.forEach(country => {
-                const countryName = country.name.common;
-                let front, back;
-
-                switch (type) {
-                    case 'capitals':
-                        front = `What is the capital of ${countryName}?`;
-                        back = country.capital[0];
-                        break;
-                    case 'populations':
-                        front = `What is the approximate population of ${countryName}?`;
-                        back = `${(country.population / 1000000).toFixed(1)} million`;
-                        break;
-                    case 'currencies':
-                        const currency = Object.values(country.currencies || {})[0];
-                        front = `What currency is used in ${countryName}?`;
-                        back = currency ? `${currency.name} (${currency.symbol || ''})` : 'No data';
-                        break;
-                    default:
-                        front = `Question about ${countryName}`;
-                        back = 'Answer';
-                }
-
-                createCard(front, back);
-            });
-            announceToScreenReader(`Generated ${shuffled.length} geography questions`);
-            Modal.close('modal-generate');
-        }
-
-    } catch (error) {
-        console.error('Geography Generation Error:', error);
-        alert(`Failed to generate geography deck: ${error.message}`);
-    } finally {
-        btn.textContent = originalText;
-        btn.disabled = false;
-    }
-}
-
-/**
- * --- 7. Render Functions ---
- */
+/** --- 4. Render Engine --- */
+function renderAll() { renderSidebar(); renderMain(); }
 
 function renderSidebar() {
-    const listEl = document.querySelector('.sidebar ul');
-    if (!listEl) return;
-    
-    listEl.innerHTML = '';
-
-    if (AppState.data.decks.length === 0) {
-        listEl.innerHTML = '<li style="cursor:default; opacity:0.6; padding:10px;">No decks yet.</li>';
-        return;
-    }
-
+    const list = document.querySelector('.sidebar ul');
+    if(!list) return;
+    list.innerHTML = '';
     AppState.data.decks.forEach(deck => {
         const li = document.createElement('li');
-        li.dataset.id = deck.id;
-        li.tabIndex = 0;
-        li.setAttribute('role', 'button');
-        li.setAttribute('aria-label', `Deck: ${deck.name}`);
+        if (deck.id === AppState.data.lastActiveDeckId) li.classList.add('active');
         
-        if (deck.id === AppState.data.lastActiveDeckId) {
-            li.classList.add('active');
-            li.setAttribute('aria-current', 'true');
-        }
+        const cards = AppState.data.cardsByDeckId[deck.id] || [];
+        const dueCount = cards.filter(c => !c.nextReview || c.nextReview <= Date.now()).length;
+        const badge = dueCount > 0 ? `<span style="background:var(--danger); color:white; padding:2px 6px; border-radius:10px; font-size:0.7em; margin-left:5px;">${dueCount}</span>` : '';
 
-        const count = AppState.data.cardsByDeckId[deck.id]?.length || 0;
-
-        li.innerHTML = `
-            <div style="display:flex; align-items:center; flex-grow:1;">
-                <span class="deck-name">${escapeHtml(deck.name)}</span>
-                <span class="count">(${count})</span>
-            </div>
-            <button class="btn-delete-deck" aria-label="Delete ${escapeHtml(deck.name)}">🗑️</button>
-        `;
-        listEl.appendChild(li);
+        li.innerHTML = `<span>${escapeHtml(deck.name)} (${cards.length}) ${badge}</span>
+                        <button class="btn-delete-deck" onclick="event.stopPropagation(); deleteDeck('${deck.id}')">🗑️</button>`;
+        li.onclick = () => switchDeck(deck.id);
+        list.appendChild(li);
     });
 }
 
-function renderMainView() {
-    const activeDeck = AppState.data.decks.find(d => d.id === AppState.data.lastActiveDeckId);
-    const titleEl = document.getElementById('current-deck-title');
-    const counterEl = document.getElementById('card-counter');
+function renderMain() {
+    const deck = AppState.data.decks.find(d => d.id === AppState.data.lastActiveDeckId);
+    const title = document.getElementById('current-deck-title');
     const frontEl = document.querySelector('.card-front');
     const backEl = document.querySelector('.card-back');
-    const controls = document.querySelector('.study-controls');
     const cardEl = document.getElementById('flashcard');
     
-    if (cardEl) cardEl.classList.remove('is-flipped');
+    if(cardEl) cardEl.classList.remove('is-flipped');
     
-    if (!activeDeck) {
-        titleEl.textContent = 'Select a Deck';
-        counterEl.textContent = '';
-        frontEl.innerHTML = '<p>Create a deck to get started!</p>';
-        backEl.innerHTML = '';
-        controls.style.opacity = '0.5';
-        controls.style.pointerEvents = 'none';
+    if (!deck) {
+        if(title) title.textContent = 'Select a Deck';
+        if(frontEl) frontEl.innerHTML = '<p class="placeholder-text">Create or select a deck to begin.</p>';
+        if(backEl) backEl.textContent = '';
         return;
     }
-
-    titleEl.textContent = activeDeck.name;
-
+    
+    if(title) title.textContent = deck.name;
     const cards = AppState.ui.currentCardList;
-
+    
     if (cards.length === 0) {
-        const isSearch = !!AppState.ui.searchQuery;
-        frontEl.innerHTML = isSearch 
-            ? `<p>No matches for "${escapeHtml(AppState.ui.searchQuery)}"</p>`
-            : '<p>This deck is empty.<br>Click <strong>+ New Card</strong> to add one.</p>';
-        backEl.textContent = '';
-        counterEl.textContent = '0 / 0';
-        controls.style.opacity = '0.5';
-        controls.style.pointerEvents = 'none';
+        if(frontEl) frontEl.innerHTML = AppState.ui.searchQuery === '__DUE__' 
+            ? '<p class="placeholder-text">🎉 You are all caught up!</p>'
+            : '<p class="placeholder-text">This deck is empty.</p>';
+        if(backEl) backEl.textContent = '';
         return;
     }
 
-    controls.style.opacity = '1';
-    controls.style.pointerEvents = 'auto';
+    const card = cards[AppState.ui.activeCardIndex];
+    const counter = document.getElementById('card-counter');
+    if(counter) counter.textContent = `${AppState.ui.activeCardIndex + 1} / ${cards.length}`;
 
-    const currentCard = cards[AppState.ui.activeCardIndex];
-    
-    frontEl.innerHTML = `
-        <div class="card-content">
-            <p style="white-space: pre-wrap;">${escapeHtml(currentCard.front)}</p>
-        </div>
-        <div class="card-actions">
-            <button class="btn-card-edit" data-card-id="${currentCard.id}" aria-label="Edit card">✏️</button>
-            <button class="btn-card-delete" data-card-id="${currentCard.id}" aria-label="Delete card">🗑️</button>
-        </div>
-    `;
-    
-    backEl.innerHTML = `
-        <div class="card-content">
-            <p style="white-space: pre-wrap;">${escapeHtml(currentCard.back)}</p>
-        </div>
-    `;
-    
-    counterEl.textContent = `${AppState.ui.activeCardIndex + 1} / ${cards.length}`;
+    // Render Front (Matches new CSS)
+    if(frontEl) frontEl.innerHTML = `
+        <div class="card-content">${escapeHtml(card.front)}</div>
+        <div class="card-actions-mini">
+            <button class="btn-mini" onclick="event.stopPropagation(); editCard('${card.id}')">✏️</button>
+            <button class="btn-mini" onclick="event.stopPropagation(); deleteCard('${card.id}')">🗑️</button>
+        </div>`;
+
+    // Render Back (With SRS Buttons)
+    if(backEl) backEl.innerHTML = `
+        <div class="card-content">${escapeHtml(card.back)}</div>
+        <div class="srs-actions" onclick="event.stopPropagation()">
+            <button class="btn-srs btn-again" onclick="rateCard('${card.id}', 'again')">Again</button>
+            <button class="btn-srs btn-good" onclick="rateCard('${card.id}', 'good')">Good</button>
+            <button class="btn-srs btn-easy" onclick="rateCard('${card.id}', 'easy')">Easy</button>
+        </div>`;
 }
 
-/**
- * --- 8. Modal System ---
- */
-const Modal = {
-    activeReturnFocus: null,
-    activeListeners: new Map(),
-
-    open(modalId) {
-        const modal = document.getElementById(modalId);
-        if (!modal) return;
+/** --- 5. Generators --- */
+const Generators = {
+    async ai(topic) {
+        if (!topic) return alert('Enter topic');
+        const btn = document.getElementById('btn-generate-ai');
+        const originalText = btn.textContent;
+        btn.textContent = 'Generating...'; 
+        btn.disabled = true;
         
-        AppState.ui.isModalOpen = true;
-        this.activeReturnFocus = document.activeElement;
-        
-        modal.style.display = 'flex';
-        modal.setAttribute('aria-hidden', 'false');
+        try {
+            // Check for placeholder key
+            if (GEMINI_API_KEY.includes('YOUR_GEMINI')) throw new Error('Invalid API Key. Edit app.js line 7.');
 
-        const focusable = modal.querySelectorAll('button, input, textarea, select');
-        if (focusable.length) focusable[0].focus();
+            const prompt = `Create 7 flashcards about "${topic}". Return strictly a JSON array of objects. Each object must have "front" and "back" keys. No markdown.`;
+            
+            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+            });
 
-        const handleTrap = (e) => {
-            if (e.key === 'Escape') this.close(modalId);
-            if (e.key === 'Tab') {
-                const first = focusable[0];
-                const last = focusable[focusable.length - 1];
-                if (e.shiftKey && document.activeElement === first) {
-                    e.preventDefault(); 
-                    last.focus();
-                } else if (!e.shiftKey && document.activeElement === last) {
-                    e.preventDefault(); 
-                    first.focus();
-                }
+            if (!res.ok) throw new Error(`API Error: ${res.status}`);
+
+            const data = await res.json();
+            const rawText = data.candidates[0].content.parts[0].text;
+            
+            // --- ROBUST PARSING FIX ---
+            // Find the first '[' and the last ']' to extract purely the JSON array
+            const jsonStartIndex = rawText.indexOf('[');
+            const jsonEndIndex = rawText.lastIndexOf(']') + 1;
+            
+            if (jsonStartIndex === -1 || jsonEndIndex === 0) {
+                throw new Error("AI did not return a valid JSON array.");
             }
-        };
-        
-        modal.addEventListener('keydown', handleTrap);
-        this.activeListeners.set(modalId, handleTrap);
+
+            const jsonString = rawText.substring(jsonStartIndex, jsonEndIndex);
+            const cards = JSON.parse(jsonString);
+            
+            if (createDeck(`✨ ${topic}`)) {
+                cards.forEach(c => createCard(c.front, c.back));
+                Modal.close('modal-generate');
+                announce('AI Deck Generated');
+            }
+        } catch(e) { 
+            console.error(e);
+            alert(`Generation Failed: ${e.message}`); 
+        } finally { 
+            btn.textContent = originalText; 
+            btn.disabled = false; 
+        }
     },
 
-    close(modalId) {
-        const modal = document.getElementById(modalId);
-        if (!modal) return;
+    async trivia(cat) {
+        const btn = document.getElementById('btn-generate-trivia');
+        const original = btn.textContent;
+        btn.textContent = 'Loading...'; btn.disabled = true;
+        try {
+            const res = await fetch(`https://opentdb.com/api.php?amount=10&category=${cat}&type=boolean`);
+            const data = await res.json();
+            if (createDeck('🎯 Trivia')) {
+                data.results.forEach(q => createCard(decodeHtml(q.question), q.correct_answer));
+                Modal.close('modal-generate');
+                announce('Trivia Deck Generated');
+            }
+        } catch(e) { alert('Trivia API Error'); }
+        finally { btn.textContent = original; btn.disabled = false; }
+    },
 
-        const handler = this.activeListeners.get(modalId);
-        if (handler) {
-            modal.removeEventListener('keydown', handler);
-            this.activeListeners.delete(modalId);
-        }
-
-        AppState.ui.isModalOpen = false;
-        AppState.ui.editingCardId = null;
-        modal.style.display = 'none';
-        modal.setAttribute('aria-hidden', 'true');
-        
-        if (this.activeReturnFocus) {
-            this.activeReturnFocus.focus();
-            this.activeReturnFocus = null;
-        }
+    async geo(type) {
+        const btn = document.getElementById('btn-generate-geo');
+        const original = btn.textContent;
+        btn.textContent = 'Loading...'; btn.disabled = true;
+        try {
+            const res = await fetch('[https://restcountries.com/v3.1/all?fields=name,capital,population](https://restcountries.com/v3.1/all?fields=name,capital,population)');
+            const data = await res.json();
+            const name = type === 'capitals' ? '🌍 Capitals' : '🌍 Populations';
+            if (createDeck(name)) {
+                data.sort(() => 0.5 - Math.random()).slice(0, 10).forEach(c => {
+                    const f = type === 'capitals' ? c.name.common : `Population of ${c.name.common}?`;
+                    const b = type === 'capitals' ? (c.capital?.[0] || 'N/A') : (c.population/1e6).toFixed(1) + 'M';
+                    createCard(f, b);
+                });
+                Modal.close('modal-generate');
+                announce('Geography Deck Generated');
+            }
+        } catch(e) { alert('Geography API Error'); }
+        finally { btn.textContent = original; btn.disabled = false; }
     }
 };
 
-/**
- * --- 9. Initialization & Event Listeners ---
- */
+/** --- 6. Utilities --- */
+function escapeHtml(str) { return str ? str.replace(/</g, "&lt;").replace(/>/g, "&gt;") : ''; }
+function decodeHtml(html) { const txt = document.createElement("textarea"); txt.innerHTML = html; return txt.value; }
+function announce(msg) { 
+    const el = document.getElementById('aria-announcer');
+    if(el) el.textContent = msg; 
+}
+
+// Global actions
+window.rateCard = (id, rating) => {
+    const deckId = AppState.data.lastActiveDeckId;
+    const card = AppState.data.cardsByDeckId[deckId].find(c => c.id === id);
+    if(card) {
+        const res = Scheduler.calculate(card, rating);
+        card.box = res.box; card.nextReview = res.nextReview;
+        Storage.save();
+        let next = AppState.ui.activeCardIndex + 1;
+        if(next >= AppState.ui.currentCardList.length) next = 0;
+        AppState.ui.activeCardIndex = next;
+        const el = document.getElementById('flashcard');
+        if(el) el.classList.remove('is-flipped');
+        setTimeout(renderMain, 300);
+        announce(`Rated ${rating}`);
+    }
+};
+
+window.deleteDeck = deleteDeck;
+window.deleteCard = deleteCard;
+window.editCard = (id) => {
+    AppState.ui.editingCardId = id;
+    const card = AppState.ui.currentCardList.find(c => c.id === id);
+    if(card) {
+        document.getElementById('card-front-input').value = card.front;
+        document.getElementById('card-back-input').value = card.back;
+        document.getElementById('title-new-card').textContent = 'Edit Card';
+        Modal.open('modal-new-card');
+    }
+};
+
+/** --- 7. Initialization --- */
+const Modal = {
+    open(id) { document.getElementById(id).style.display = 'flex'; },
+    close(id) { document.getElementById(id).style.display = 'none'; }
+};
 
 document.addEventListener('DOMContentLoaded', () => {
-    if (Storage.load()) {
-        refreshCardList();
-    }
-    renderSidebar();
-    renderMainView();
+    Storage.load();
+    Theme.init();
+    refreshCardList();
+    renderAll();
 
-    // Sidebar: Switch & Delete decks
-    document.querySelector('.sidebar ul').addEventListener('click', (e) => {
-        const deleteBtn = e.target.closest('.btn-delete-deck');
-        const deckItem = e.target.closest('li');
+    // Listeners
+    const bind = (id, event, fn) => { const el = document.getElementById(id); if(el) el.addEventListener(event, fn); };
 
-        if (deleteBtn && deckItem) {
-            e.stopPropagation();
-            deleteDeck(deckItem.dataset.id);
-            return;
-        }
-
-        if (deckItem) {
-            switchDeck(deckItem.dataset.id);
-        }
-    });
-
-    document.querySelector('.sidebar ul').addEventListener('keydown', (e) => {
-        const deckItem = e.target.closest('li');
-        if (deckItem && (e.key === 'Enter' || e.key === ' ')) {
-            e.preventDefault();
-            switchDeck(deckItem.dataset.id);
-        }
-    });
-
-    // Search
-    const handleSearch = debounce((e) => {
-        AppState.ui.searchQuery = e.target.value.trim();
-        AppState.ui.activeCardIndex = 0;
-        refreshCardList();
-        renderMainView();
-        
-        if (AppState.ui.searchQuery) {
-            announceToScreenReader(`Found ${AppState.ui.currentCardList.length} cards`);
-        }
-    }, 300);
+    bind('btn-theme-toggle', 'click', () => Theme.toggle());
+    bind('btn-new-deck', 'click', () => Modal.open('modal-new-deck'));
+    bind('btn-save-deck', 'click', () => { if(createDeck(document.getElementById('new-deck-name').value)) Modal.close('modal-new-deck'); });
     
-    document.getElementById('search-input').addEventListener('input', handleSearch);
-
-    // Card edit/delete buttons
-    document.querySelector('.flashcard').addEventListener('click', (e) => {
-        const editBtn = e.target.closest('.btn-card-edit');
-        const deleteBtn = e.target.closest('.btn-card-delete');
-        
-        if (editBtn) {
-            e.stopPropagation();
-            const cardId = editBtn.dataset.cardId;
-            const card = AppState.ui.currentCardList.find(c => c.id === cardId);
-            if (card) {
-                AppState.ui.editingCardId = cardId;
-                document.getElementById('card-front-input').value = card.front;
-                document.getElementById('card-back-input').value = card.back;
-                document.getElementById('title-new-card').textContent = 'Edit Card';
-                Modal.open('modal-new-card');
-            }
-        }
-        
-        if (deleteBtn) {
-            e.stopPropagation();
-            const cardId = deleteBtn.dataset.cardId;
-            deleteCard(cardId);
-        }
-    });
-
-    // Modal Triggers
-    document.getElementById('btn-new-deck').addEventListener('click', () => {
-        document.getElementById('new-deck-name').value = '';
-        Modal.open('modal-new-deck');
-    });
-
-    document.getElementById('btn-new-card').addEventListener('click', () => {
-        if (!AppState.data.lastActiveDeckId) {
-            alert("Please create or select a deck first.");
-            return;
-        }
+    bind('btn-new-card', 'click', () => {
         AppState.ui.editingCardId = null;
         document.getElementById('card-front-input').value = '';
         document.getElementById('card-back-input').value = '';
-        document.getElementById('title-new-card').textContent = 'Add New Card';
+        document.getElementById('title-new-card').textContent = 'Add Card';
         Modal.open('modal-new-card');
     });
-
-    // NEW: Generate Deck Modal Trigger
-    const btnOpenGenerate = document.getElementById('btn-open-generate');
-    if (btnOpenGenerate) {
-        btnOpenGenerate.addEventListener('click', () => {
-            Modal.open('modal-generate');
-        });
-    }
-
-    // NEW: API Generation Buttons
-    const btnGenerateAI = document.getElementById('btn-generate-ai');
-    if (btnGenerateAI) {
-        btnGenerateAI.addEventListener('click', () => {
-            const topic = document.getElementById('gen-topic').value.trim();
-            if (!topic) {
-                alert('Please enter a topic');
-                return;
-            }
-            generateAIDeck(topic);
-        });
-    }
-
-    const btnGenerateTrivia = document.getElementById('btn-generate-trivia');
-    if (btnGenerateTrivia) {
-        btnGenerateTrivia.addEventListener('click', () => {
-            const category = document.getElementById('trivia-category').value;
-            generateTriviaDeck(parseInt(category), 10);
-        });
-    }
-
-    const btnGenerateGeo = document.getElementById('btn-generate-geo');
-    if (btnGenerateGeo) {
-        btnGenerateGeo.addEventListener('click', () => {
-            const type = document.getElementById('geo-type').value;
-            generateGeographyDeck(type, 15);
-        });
-    }
-
-    // Save Buttons
-    document.getElementById('btn-save-deck').addEventListener('click', () => {
-        const name = document.getElementById('new-deck-name').value;
-        if (createDeck(name)) {
-            Modal.close('modal-new-deck');
-        }
+    
+    bind('btn-save-card', 'click', () => {
+        const f = document.getElementById('card-front-input').value;
+        const b = document.getElementById('card-back-input').value;
+        if(AppState.ui.editingCardId) updateCard(AppState.ui.editingCardId, f, b);
+        else createCard(f, b);
+        Modal.close('modal-new-card');
     });
 
-    document.getElementById('btn-save-card').addEventListener('click', () => {
-        const front = document.getElementById('card-front-input').value;
-        const back = document.getElementById('card-back-input').value;
-        
-        let success;
-        if (AppState.ui.editingCardId) {
-            success = updateCard(AppState.ui.editingCardId, front, back);
-        } else {
-            success = createCard(front, back);
-        }
-        
-        if (success) {
-            Modal.close('modal-new-card');
-        }
+    const cardEl = document.getElementById('flashcard');
+    if(cardEl) cardEl.onclick = (e) => {
+        if(!e.target.closest('button')) cardEl.classList.toggle('is-flipped');
+    };
+
+    bind('btn-flip', 'click', () => cardEl.classList.toggle('is-flipped'));
+    bind('btn-next', 'click', () => {
+        AppState.ui.activeCardIndex = (AppState.ui.activeCardIndex + 1) % AppState.ui.currentCardList.length;
+        renderMain();
+    });
+    bind('btn-prev', 'click', () => {
+        const len = AppState.ui.currentCardList.length;
+        AppState.ui.activeCardIndex = (AppState.ui.activeCardIndex - 1 + len) % len;
+        renderMain();
     });
 
-    document.getElementById('new-deck-name').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            document.getElementById('btn-save-deck').click();
-        }
+    // Generators
+    bind('btn-open-generate', 'click', () => Modal.open('modal-generate'));
+    bind('btn-generate-ai', 'click', () => Generators.ai(document.getElementById('gen-topic').value));
+    bind('btn-generate-trivia', 'click', () => Generators.trivia(document.getElementById('trivia-category').value));
+    bind('btn-generate-geo', 'click', () => Generators.geo(document.getElementById('geo-type').value));
+    
+    // Filters
+    bind('btn-filter-due', 'click', () => {
+        AppState.ui.searchQuery = AppState.ui.searchQuery === '__DUE__' ? '' : '__DUE__';
+        refreshCardList(); renderMain();
+    });
+    bind('search-input', 'input', (e) => {
+        AppState.ui.searchQuery = e.target.value.trim();
+        refreshCardList(); renderMain();
     });
 
-    // Global Modal Close
-    document.addEventListener('click', (e) => {
-        if (e.target.dataset.closeModal) {
-            Modal.close(e.target.closest('.modal').id);
-        }
-        if (e.target.classList.contains('modal')) {
-            Modal.close(e.target.id);
-        }
-    });
-
-    // Study Controls
-    document.getElementById('btn-next').addEventListener('click', () => navigateCard(1));
-    document.getElementById('btn-prev').addEventListener('click', () => navigateCard(-1));
-    document.getElementById('btn-flip').addEventListener('click', () => {
-        document.getElementById('flashcard').classList.toggle('is-flipped');
-    });
-    document.getElementById('btn-shuffle').addEventListener('click', shuffleCards);
-
-    // Keyboard Shortcuts
+    window.onclick = (e) => { if(e.target.classList.contains('modal')) e.target.style.display = 'none'; };
+    document.querySelectorAll('[data-close-modal]').forEach(b => b.onclick = (e) => e.target.closest('.modal').style.display = 'none');
+    
     document.addEventListener('keydown', (e) => {
-        if (AppState.ui.isModalOpen || 
-            ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
-            return;
-        }
-
-        switch (e.key) {
-            case ' ':
-            case 'Enter':
-                e.preventDefault();
-                document.getElementById('flashcard').classList.toggle('is-flipped');
-                break;
-            case 'ArrowRight':
-                navigateCard(1);
-                break;
-            case 'ArrowLeft':
-                navigateCard(-1);
-                break;
-        }
+        if(AppState.ui.isModalOpen) return;
+        if(e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if(cardEl) cardEl.classList.toggle('is-flipped'); }
+        if(e.key === 'ArrowRight') document.getElementById('btn-next').click();
+        if(e.key === 'ArrowLeft') document.getElementById('btn-prev').click();
     });
 });
