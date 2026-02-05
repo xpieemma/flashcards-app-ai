@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="A simple, accessible Flashcard App for study with AI-powered generation.">
+    <meta name="description" content="AI-Powered Flashcard App with Spaced Repetition">
     <meta name="theme-color" content="#2563eb">
-    <title>Flashcard App - AI Enhanced</title>
+    <title>FlashStudy - AI & SRS</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -15,7 +15,8 @@
         <header class="app-header">
             <div class="logo">⚡ FlashStudy</div>
             <div class="header-actions">
-                <button id="btn-open-generate" class="btn btn-secondary" aria-label="Generate flashcards with AI">✨ Generate</button>
+                <button id="btn-theme-toggle" class="btn btn-icon" aria-label="Toggle Dark Mode">🌙</button>
+                <button id="btn-open-generate" class="btn btn-secondary" aria-label="Generate flashcards">✨ AI Generate</button>
                 <button id="btn-new-deck" class="btn btn-primary" aria-label="Create a new deck">+ New Deck</button>
             </div>
         </header>
@@ -30,19 +31,22 @@
             <section class="study-container" aria-label="Study area">
                 <div class="deck-header">
                     <h2 id="current-deck-title">Select a Deck</h2>
-                    <div id="card-counter" class="counter" aria-live="polite" aria-atomic="true"></div>
+                    <div class="deck-meta">
+                        <span id="card-counter" class="counter" aria-live="polite"></span>
+                    </div>
                 </div>
 
                 <div class="toolbar">
                     <input 
                         type="search" 
                         id="search-input" 
-                        placeholder="Search cards by keyword..." 
-                        aria-label="Search cards in current deck"
+                        placeholder="Search or Filter..." 
+                        aria-label="Search cards"
                     >
                     <div class="toolbar-actions">
-                        <button id="btn-shuffle" class="btn btn-secondary" aria-label="Shuffle cards in random order">🔀 Shuffle</button>
-                        <button id="btn-new-card" class="btn btn-secondary" aria-label="Add a new card to this deck">+ New Card</button>
+                        <button id="btn-filter-due" class="btn btn-secondary" aria-label="Show only due cards">⏰ Study Due</button>
+                        <button id="btn-shuffle" class="btn btn-secondary" aria-label="Shuffle cards">🔀 Shuffle</button>
+                        <button id="btn-new-card" class="btn btn-secondary" aria-label="Add card">+ Add</button>
                     </div>
                 </div>
 
@@ -51,202 +55,117 @@
                     id="flashcard" 
                     role="button"
                     tabindex="0" 
-                    aria-label="Flashcard. Click or press Space to flip."
+                    aria-label="Flashcard. Press Space to flip."
                     aria-pressed="false"
                 >
                     <div class="card-inner">
-                        <div class="card-front" aria-label="Card front">
+                        <div class="card-front" aria-label="Question">
                             <p>Select a deck to start studying.</p>
                         </div>
-                        <div class="card-back" aria-label="Card back" aria-hidden="true">
+                        <div class="card-back" aria-label="Answer" aria-hidden="true">
                             </div>
                     </div>
                 </div>
 
                 <nav class="controls study-controls" aria-label="Card navigation">
-                    <button id="btn-prev" class="btn btn-control" aria-label="Go to previous card">← Prev</button>
-                    <button id="btn-flip" class="btn btn-control" aria-label="Flip card to see answer">Flip ⟳</button>
-                    <button id="btn-next" class="btn btn-control" aria-label="Go to next card">Next →</button>
+                    <button id="btn-prev" class="btn btn-control" aria-label="Previous">← Prev</button>
+                    <button id="btn-flip" class="btn btn-control" aria-label="Flip">Flip ⟳</button>
+                    <button id="btn-next" class="btn btn-control" aria-label="Next">Next →</button>
                 </nav>
             </section>
 
         </main>
 
-        <footer class="app-footer" role="contentinfo">
-            <p>
-                <strong>Keyboard shortcuts:</strong> 
-                <kbd>Space</kbd> or <kbd>Enter</kbd> to flip, 
-                <kbd>←</kbd> <kbd>→</kbd> to navigate cards
-            </p>
+        <footer class="app-footer">
+            <p><strong>Shortcuts:</strong> <kbd>Space</kbd> Flip • <kbd>←</kbd> <kbd>→</kbd> Navigate • <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> Rate (when flipped)</p>
         </footer>
 
     </div>
 
-    <div 
-        id="modal-new-deck" 
-        class="modal" 
-        role="dialog" 
-        aria-modal="true" 
-        aria-labelledby="title-new-deck"
-        aria-hidden="true"
-        style="display:none;"
-    >
+    <div id="modal-new-deck" class="modal" role="dialog" aria-hidden="true" style="display:none;">
         <div class="modal-content">
-            <h2 id="title-new-deck">Create New Deck</h2>
+            <h2>Create New Deck</h2>
             <form id="form-new-deck" onsubmit="return false;">
                 <div class="form-group">
-                    <label for="new-deck-name">Deck Name <span aria-label="required">*</span></label>
-                    <input 
-                        type="text" 
-                        id="new-deck-name" 
-                        placeholder="e.g., Biology 101"
-                        required
-                        aria-required="true"
-                        maxlength="100"
-                    >
+                    <label for="new-deck-name">Deck Name</label>
+                    <input type="text" id="new-deck-name" placeholder="e.g., Biology 101" required>
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" data-close-modal="true">Cancel</button>
-                    <button type="submit" id="btn-save-deck" class="btn btn-primary">Create Deck</button>
+                    <button type="submit" id="btn-save-deck" class="btn btn-primary">Create</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <div 
-        id="modal-new-card" 
-        class="modal" 
-        role="dialog" 
-        aria-modal="true" 
-        aria-labelledby="title-new-card"
-        aria-hidden="true"
-        style="display:none;"
-    >
+    <div id="modal-new-card" class="modal" role="dialog" aria-hidden="true" style="display:none;">
         <div class="modal-content">
-            <h2 id="title-new-card">Add New Card</h2>
+            <h2 id="title-new-card">Add Card</h2>
             <form id="form-new-card" onsubmit="return false;">
                 <div class="form-group">
-                    <label for="card-front-input">Front (Question) <span aria-label="required">*</span></label>
-                    <textarea 
-                        id="card-front-input" 
-                        rows="3" 
-                        placeholder="What is..."
-                        required
-                        aria-required="true"
-                        maxlength="500"
-                    ></textarea>
+                    <label for="card-front-input">Front (Question)</label>
+                    <textarea id="card-front-input" rows="3" required></textarea>
                 </div>
                 <div class="form-group">
-                    <label for="card-back-input">Back (Answer) <span aria-label="required">*</span></label>
-                    <textarea 
-                        id="card-back-input" 
-                        rows="3" 
-                        placeholder="It is..."
-                        required
-                        aria-required="true"
-                        maxlength="500"
-                    ></textarea>
+                    <label for="card-back-input">Back (Answer)</label>
+                    <textarea id="card-back-input" rows="3" required></textarea>
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" data-close-modal="true">Cancel</button>
-                    <button type="submit" id="btn-save-card" class="btn btn-primary">Save Card</button>
+                    <button type="submit" id="btn-save-card" class="btn btn-primary">Save</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <div 
-        id="modal-generate" 
-        class="modal" 
-        role="dialog" 
-        aria-modal="true" 
-        aria-labelledby="title-generate"
-        aria-hidden="true"
-        style="display:none;"
-    >
+    <div id="modal-generate" class="modal" role="dialog" aria-hidden="true" style="display:none;">
         <div class="modal-content" style="max-width: 500px;">
-            <h2 id="title-generate">✨ Generate Flashcards</h2>
-            <p style="margin-bottom: 1.5rem; color: var(--text-muted); font-size: 0.9rem;">
-                Choose a generation method to auto-create study decks:
-            </p>
+            <h2>✨ AI Flashcard Generator</h2>
+            <p class="modal-desc">Auto-generate decks using free APIs.</p>
 
             <div class="gen-option">
-                <h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🤖 AI - Custom Topic</h3>
-                <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
-                    Use Google Gemini AI to generate flashcards about any subject.
-                </p>
+                <h3>🤖 Google Gemini (AI)</h3>
                 <div class="form-group">
-                    <label for="gen-topic">Enter a topic:</label>
-                    <input 
-                        type="text" 
-                        id="gen-topic" 
-                        placeholder="e.g., Photosynthesis, French Verbs, Python Basics"
-                        style="margin-bottom: 0.5rem;"
-                    >
-                    <button id="btn-generate-ai" class="btn btn-primary" style="width: 100%;">
-                        Generate with AI
-                    </button>
+                    <input type="text" id="gen-topic" placeholder="Topic (e.g. Photosynthesis, React Hooks)">
+                    <button id="btn-generate-ai" class="btn btn-primary full-width">Generate Deck</button>
                 </div>
             </div>
-
-            <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid var(--border);">
+            
+            <div class="gen-separator">OR</div>
 
             <div class="gen-option">
-                <h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🎯 Trivia Quiz</h3>
-                <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
-                    Get multiple-choice quiz questions from Open Trivia Database.
-                </p>
+                <h3>🎯 Open Trivia DB</h3>
                 <div class="form-group">
-                    <label for="trivia-category">Select category:</label>
-                    <select id="trivia-category" style="padding: 8px; width: 100%; margin-bottom: 0.5rem;">
+                    <select id="trivia-category">
                         <option value="9">General Knowledge</option>
-                        <option value="17">Science & Nature</option>
-                        <option value="18" selected>Computer Science</option>
-                        <option value="21">Sports</option>
+                        <option value="17">Science</option>
+                        <option value="18" selected>Computers</option>
                         <option value="23">History</option>
                     </select>
-                    <button id="btn-generate-trivia" class="btn btn-primary" style="width: 100%;">
-                        Generate Trivia
-                    </button>
+                    <button id="btn-generate-trivia" class="btn btn-primary full-width">Get Trivia Questions</button>
                 </div>
             </div>
 
-            <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid var(--border);">
+            <div class="gen-separator">OR</div>
 
             <div class="gen-option">
-                <h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🌍 Geography</h3>
-                <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
-                    Learn about countries using REST Countries API.
-                </p>
+                <h3>🌍 REST Countries</h3>
                 <div class="form-group">
-                    <label for="geo-type">Select type:</label>
-                    <select id="geo-type" style="padding: 8px; width: 100%; margin-bottom: 0.5rem;">
-                        <option value="capitals" selected>World Capitals</option>
+                    <select id="geo-type">
+                        <option value="capitals">Capitals</option>
                         <option value="populations">Populations</option>
-                        <option value="currencies">Currencies</option>
                     </select>
-                    <button id="btn-generate-geo" class="btn btn-primary" style="width: 100%;">
-                        Generate Geography
-                    </button>
+                    <button id="btn-generate-geo" class="btn btn-primary full-width">Get Geography Facts</button>
                 </div>
             </div>
 
-            <div class="modal-actions" style="margin-top: 1.5rem;">
-                <button type="button" class="btn btn-secondary" data-close-modal="true" style="width: 100%;">
-                    Close
-                </button>
+            <div class="modal-actions">
+                <button class="btn btn-secondary full-width" data-close-modal="true">Close</button>
             </div>
         </div>
     </div>
 
-    <div 
-        id="aria-announcer" 
-        class="sr-only" 
-        aria-live="polite" 
-        aria-atomic="true"
-        role="status"
-    ></div>
-
+    <div id="aria-announcer" class="sr-only" aria-live="polite"></div>
     <script src="app.js"></script>
 </body>
 </html>
